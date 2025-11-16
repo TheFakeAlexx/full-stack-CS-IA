@@ -15,9 +15,9 @@ const isAuthenticated = () => {
 // Home Page Component
 const HomePage = () => {
   const [stats, setStats] = useState({
-    creativity: { hours: 0, goal: 25 },
-    activity: { hours: 0, goal: 25 },
-    service: { hours: 0, goal: 25 }
+    creativity: { projects: 0, goal: 3 },
+    activity: { projects: 0, goal: 3 },
+    service: { projects: 0, goal: 3 }
   });
   const [recentActivities, setRecentActivities] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -52,11 +52,11 @@ const HomePage = () => {
     fetchActivities();
   }, []);
 
-  const ProgressBar = ({ category, hours, goal }) => {
-    const percentage = (hours / goal) * 100;
+  const ProgressBar = ({ category, projects, goal }) => {
+    const percentage = (projects && goal) ? (projects / goal) * 100 : 0;
     return (
       <div className="progress-bar">
-        <h3>{category.charAt(0).toUpperCase() + category.slice(1)}: {hours}/{goal} hours</h3>
+        <h3>{category.charAt(0).toUpperCase() + category.slice(1)}: {projects || 0}/{goal || 3} projects</h3>
         <div className="bar-container">
           <div className="bar" style={{ width: `${percentage}%` }}></div>
         </div>
@@ -77,8 +77,7 @@ const HomePage = () => {
         </div>
         <ul className="nav-links">
           <li><Link to="/">Dashboard</Link></li>
-          <li><Link to="/add-activity">Add Activity</Link></li>
-          <li><Link to="/profile">Profile</Link></li>
+          {getRole() === 'student' && <li><Link to="/student">Student Portal</Link></li>}
           <li><Link to="/logout" onClick={() => {
             localStorage.removeItem('token');
             localStorage.removeItem('role');
@@ -86,7 +85,6 @@ const HomePage = () => {
           }}>Logout</Link></li>
           {getRole() === 'admin' && <li><Link to="/admin">Admin</Link></li>}
           {getRole() === 'teacher' && <li><Link to="/teacher">Teacher</Link></li>}
-          {getRole() === 'student' && <li><Link to="/student">Student Portal</Link></li>}
         </ul>
       </nav>
 
@@ -94,20 +92,18 @@ const HomePage = () => {
       <header className="hero">
         <h1>Welcome to Your CAS Journey</h1>
         <p>Track your Creativity, Activity, and Service experiences to meet IB requirements.</p>
-        <button className="cta-button" onClick={() => {/* Open modal for quick add */}}>
-          Quick Add Activity
-        </button>
+
       </header>
 
       {/* Dashboard Stats */}
       <section className="dashboard">
         <h2>Your Progress</h2>
         <div className="stats-grid">
-          <ProgressBar category="creativity" hours={stats.creativity.hours} goal={stats.creativity.goal} />
-          <ProgressBar category="activity" hours={stats.activity.hours} goal={stats.activity.goal} />
-          <ProgressBar category="service" hours={stats.service.hours} goal={stats.service.goal} />
+          <ProgressBar category="creativity" projects={stats.creativity.projects} goal={stats.creativity.goal} />
+          <ProgressBar category="activity" projects={stats.activity.projects} goal={stats.activity.goal} />
+          <ProgressBar category="service" projects={stats.service.projects} goal={stats.service.goal} />
         </div>
-        {stats.creativity.hours + stats.activity.hours + stats.service.hours >= 150 ? (
+        {stats.creativity.projects + stats.activity.projects + stats.service.projects >= 9 ? (
           <div className="achievement">🎉 Congratulations! You've met your CAS goals!</div>
         ) : null}
       </section>
@@ -121,7 +117,7 @@ const HomePage = () => {
           <ul className="activities-list">
             {recentActivities.map((activity) => (
               <li key={activity.id} className="activity-item">
-                <strong>{activity.title}</strong> - {activity.category} ({activity.hours} hours)
+                <strong>{activity.title}</strong> - {activity.category} ({activity.projects} projects)
                 <br />
                 <small>{new Date(activity.date).toLocaleDateString()}</small>
               </li>
@@ -152,7 +148,14 @@ const Login = () => {
       const response = await axios.post('http://localhost:5000/api/auth/login', { email, password });
       localStorage.setItem('token', response.data.token);
       localStorage.setItem('role', response.data.role);
-      navigate('/');
+      const role = response.data.role;
+      if (role === 'admin') {
+        navigate('/admin');
+      } else if (role === 'teacher') {
+        navigate('/teacher');
+      } else {
+        navigate('/');
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed');
     }
@@ -444,7 +447,7 @@ const Student = () => {
   };
 
   const handleFileChange = (e) => {
-    const files = Array.from(e.target.files);
+    const files = Array.from(e.target.files).slice(0, 7);
     const imageFiles = files.filter(file => file.type.startsWith('image/'));
     const videoFiles = files.filter(file => file.type.startsWith('video/'));
 
@@ -454,10 +457,6 @@ const Student = () => {
     }
     if (videoFiles.length > 2) {
       setError('Maximum 2 videos allowed');
-      return;
-    }
-    if (files.length > 7) {
-      setError('Maximum 7 files total (5 photos + 2 videos)');
       return;
     }
 
@@ -535,10 +534,10 @@ const Student = () => {
 
   return (
     <div className="student-container">
-      <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
       <h2>Student CAS Portal</h2>
 
       <div className="student-actions">
+        <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
         <button className="submit-project-btn" onClick={() => setShowSubmitForm(!showSubmitForm)}>
           {showSubmitForm ? 'Cancel' : 'Submit New CAS Project'}
         </button>
@@ -694,6 +693,8 @@ const Student = () => {
               </select>
             </div>
 
+
+
             <div className="form-group">
               <label>Evidence (Upload up to 5 photos and 2 videos):</label>
               <input
@@ -817,8 +818,12 @@ const Teacher = () => {
 
   return (
     <div className="teacher-container">
-      <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
       <h2>Teacher Dashboard</h2>
+      <button className="logout-btn" onClick={() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        window.location.href = '/login';
+      }}>Logout</button>
 
       <section>
         <h3>CAS Projects in Your Section</h3>
@@ -840,6 +845,31 @@ const Teacher = () => {
               <p><strong>Learning Outcomes:</strong> {project.learningOutcomes.join(', ')}</p>
               <p><strong>UN Goals:</strong> {project.unGoals.join(', ')}</p>
               <p><strong>Supervisor:</strong> {project.supervisorName}</p>
+              {project.evidence && project.evidence.length > 0 && (
+                <div className="evidence-section">
+                  <p><strong>Evidence ({project.evidence.length} files):</strong></p>
+                  <div className="evidence-files">
+                    {project.evidence.map((file, index) => (
+                      <div key={index} className="evidence-file">
+                        {file.mimetype.startsWith('image/') ? (
+                          <img
+                            src={`http://localhost:5000/uploads/${file.filename}`}
+                            alt={file.originalName}
+                            className="evidence-thumbnail"
+                          />
+                        ) : (
+                          <video
+                            src={`http://localhost:5000/uploads/${file.filename}`}
+                            controls
+                            className="evidence-video"
+                          />
+                        )}
+                        <p className="file-name">{file.originalName}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {project.approved && project.teacherComments && (
                 <p><strong>Comments:</strong> {project.teacherComments}</p>
               )}
@@ -1038,8 +1068,12 @@ const Admin = () => {
 
   return (
     <div className="admin-container">
-      <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
       <h2>Admin Dashboard</h2>
+      <button className="logout-btn" onClick={() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        window.location.href = '/login';
+      }}>Logout</button>
 
       <section>
         <h3>Users Awaiting Approval</h3>

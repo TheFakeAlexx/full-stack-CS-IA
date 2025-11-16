@@ -139,7 +139,7 @@ const casProjectSchema = new mongoose.Schema({
     uploadedAt: { type: Date, default: Date.now }
   }],
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  section: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', required: true },
+  section: { type: mongoose.Schema.Types.ObjectId, ref: 'Section' },
   approved: { type: Boolean, default: false },
   teacherComments: { type: String },
   submittedAt: { type: Date, default: Date.now }
@@ -419,25 +419,45 @@ app.post('/api/admin/assign-teacher-to-section', authenticateToken, async (req, 
 });
 
 
-app.get("/api/user/stats", authenticateToken, (req, res) => {
-  
-  res.json({
-    creativity: { hours: 15, goal: 25 },
-    activity: { hours: 20, goal: 25 },
-    service: { hours: 10, goal: 25 }
-  });
+app.get("/api/user/stats", authenticateToken, async (req, res) => {
+  try {
+    const projects = await CASProject.find({ student: req.user.id, approved: true });
+    let creativity = 0, activity = 0, service = 0;
+    projects.forEach(project => {
+      const cats = Array.isArray(project.category) ? project.category : [project.category];
+      cats.forEach(cat => {
+        if (cat === 'Creativity') creativity += 1;
+        else if (cat === 'Activity') activity += 1;
+        else if (cat === 'Service') service += 1;
+      });
+    });
+    res.json({
+      creativity: { projects: creativity, goal: 3 },
+      activity: { projects: activity, goal: 3 },
+      service: { projects: service, goal: 3 }
+    });
+  } catch (err) {
+    console.error('Error fetching stats:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 
-app.get("/api/activities/recent", (req, res) => {
-
-  res.json([
-    { id: 1, title: "Art Exhibition", category: "creativity", hours: 5, date: "2023-10-01" },
-    { id: 2, title: "Football Match", category: "activity", hours: 3, date: "2023-09-28" },
-    { id: 3, title: "Community Clean-up", category: "service", hours: 4, date: "2023-09-25" },
-    { id: 4, title: "Music Practice", category: "creativity", hours: 2, date: "2023-09-20" },
-    { id: 5, title: "Volunteering at Shelter", category: "service", hours: 6, date: "2023-09-15" }
-  ]);
+app.get("/api/activities/recent", authenticateToken, async (req, res) => {
+  try {
+    const projects = await CASProject.find({ student: req.user.id }).sort({ submittedAt: -1 }).limit(5);
+    const activities = projects.map(project => ({
+      id: project._id,
+      title: project.title,
+      category: Array.isArray(project.category) ? project.category.join(', ').toLowerCase() : project.category.toLowerCase(),
+      projects: 1,
+      date: project.submittedAt.toISOString().split('T')[0]
+    }));
+    res.json(activities);
+  } catch (err) {
+    console.error('Error fetching activities:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 // Student: Submit a CAS project
@@ -485,7 +505,7 @@ app.post('/api/student/submit-project', authenticateToken, upload.array('evidenc
     // Find the section where the student is enrolled
     const section = await Section.findOne({ students: req.user.id });
     if (!section) {
-      return res.status(400).json({ message: 'Student not assigned to any section' });
+      return res.status(400).json({ message: 'Student not assigned to any section. Please contact admin.' });
     }
 
     // Process evidence files
@@ -511,7 +531,7 @@ app.post('/api/student/submit-project', authenticateToken, upload.array('evidenc
       status,
       evidence,
       student: req.user.id,
-      section: section._id
+      section: section._id,
     });
 
     await project.save();
