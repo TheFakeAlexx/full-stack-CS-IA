@@ -141,8 +141,11 @@ const casProjectSchema = new mongoose.Schema({
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   section: { type: mongoose.Schema.Types.ObjectId, ref: 'Section' },
   approved: { type: Boolean, default: false },
+  denied: { type: Boolean, default: false },
   teacherComments: { type: String },
-  submittedAt: { type: Date, default: Date.now }
+  denialComments: { type: String },
+  submittedAt: { type: Date, default: Date.now },
+  reviewedAt: { type: Date }
 });
 
 const CASProject = mongoose.model('CASProject', casProjectSchema);
@@ -532,12 +535,111 @@ app.post('/api/student/submit-project', authenticateToken, upload.array('evidenc
       evidence,
       student: req.user.id,
       section: section._id,
+      approved: false,
+      denied: false,
+      teacherComments: '',
+      denialComments: ''
     });
 
     await project.save();
     res.status(201).json({ message: 'Project submitted successfully', project });
   } catch (err) {
     // Clean up uploaded files if project creation fails
+    if (req.files) {
+      req.files.forEach(file => {
+        fs.unlinkSync(file.path);
+      });
+    }
+    res.status(500).json({ message: err.message || 'Server error' });
+  }
+});
+
+// Student: Edit and resubmit a denied project
+app.put('/api/student/edit-project/:id', authenticateToken, upload.array('evidence', 7), async (req, res) => {
+  if (req.user.role !== 'student') return res.status(403).json({ message: 'Access denied' });
+
+  try {
+    const project = await CASProject.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+    if (project.student.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Access denied: Not your project' });
+    }
+    if (!project.denied) {
+      return res.status(400).json({ message: 'Only denied projects can be edited' });
+    }
+
+    const {
+      title,
+      description,
+      category,
+      location,
+      startDate,
+      endDate,
+      learningOutcomes,
+      unGoals,
+      investigation,
+      learnerProfile,
+      supervisorName,
+      status
+    } = req.body;
+
+    // Validation
+    if (!title || !description || !category || !location || !startDate || !endDate ||
+        !learningOutcomes || !unGoals || !investigation || !learnerProfile || !supervisorName || !status) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (new Date(startDate) >= new Date(endDate)) {
+      return res.status(400).json({ message: 'End date must be after start date' });
+    }
+
+    // Validate file uploads
+    const files = req.files || [];
+    const imageCount = files.filter(file => file.mimetype.startsWith('image/')).length;
+    const videoCount = files.filter(file => file.mimetype.startsWith('video/')).length;
+
+    if (imageCount > 5) {
+      return res.status(400).json({ message: 'Maximum 5 photos allowed' });
+    }
+    if (videoCount > 2) {
+      return res.status(400).json({ message: 'Maximum 2 videos allowed' });
+    }
+
+    // Process evidence files
+    const evidence = files.map(file => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size
+    }));
+
+    // Update project
+    project.title = title;
+    project.description = description;
+    project.category = Array.isArray(category) ? category : [category];
+    project.location = location;
+    project.startDate = startDate;
+    project.endDate = endDate;
+    project.learningOutcomes = Array.isArray(learningOutcomes) ? learningOutcomes : [learningOutcomes];
+    project.unGoals = Array.isArray(unGoals) ? unGoals : [unGoals];
+    project.investigation = investigation;
+    project.learnerProfile = learnerProfile;
+    project.supervisorName = supervisorName;
+    project.status = status;
+    project.evidence = evidence;
+    project.approved = false;
+    project.denied = false;
+    project.teacherComments = '';
+    project.denialComments = '';
+    project.reviewedAt = undefined;
+    project.submittedAt = new Date();
+
+    await project.save();
+    res.json({ message: 'Project updated and resubmitted successfully', project });
+  } catch (err) {
+    // Clean up uploaded files if project update fails
     if (req.files) {
       req.files.forEach(file => {
         fs.unlinkSync(file.path);
@@ -573,12 +675,71 @@ app.get('/api/teacher/projects', authenticateToken, async (req, res) => {
   }
 });
 
+// Teacher: Get students in section with project counts
+app.get('/api/teacher/section-students', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
+  try {
+    const section = await Section.findOne({ teacher: req.user.id }).populate('students', 'email');
+    if (!section) {
+      return res.status(404).json({ message: 'No section assigned to this teacher' });
+    }
+
+    // Get project counts for each student
+    const studentsWithCounts = await Promise.all(
+      section.students.map(async (student) => {
+        const projectCount = await CASProject.countDocuments({
+          student: student._id,
+          section: section._id,
+          approved: true
+        });
+        return {
+          _id: student._id,
+          email: student.email,
+          projectCount: projectCount
+        };
+      })
+    );
+
+    res.json({
+      sectionName: section.name,
+      students: studentsWithCounts
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Teacher: Get specific student's projects
+app.get('/api/teacher/student-projects/:studentId', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
+  try {
+    const section = await Section.findOne({ teacher: req.user.id });
+    if (!section) {
+      return res.status(404).json({ message: 'No section assigned to this teacher' });
+    }
+
+    // Check if student is in teacher's section
+    if (!section.students.includes(req.params.studentId)) {
+      return res.status(403).json({ message: 'Student not in your section' });
+    }
+
+    const projects = await CASProject.find({
+      student: req.params.studentId,
+      section: section._id
+    }).populate('student', 'email').sort({ submittedAt: -1 });
+
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Teacher: Approve a project
 app.post('/api/teacher/approve-project/:id', authenticateToken, async (req, res) => {
   if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
   const { teacherComments } = req.body;
   try {
-    const project = await CASProject.findById(req.params.id).populate('section');
+    const project = await CASProject.findById(req.params.id).populate('section').populate('student', 'email');
     if (!project) {
       return res.status(404).json({ message: 'Project not found' });
     }
@@ -586,9 +747,59 @@ app.post('/api/teacher/approve-project/:id', authenticateToken, async (req, res)
       return res.status(403).json({ message: 'Access denied: Project not in your section' });
     }
     project.approved = true;
+    project.denied = false;
     project.teacherComments = teacherComments || '';
+    project.denialComments = '';
+    project.reviewedAt = new Date();
     await project.save();
+
+    // Send email notification
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: project.student.email,
+      subject: 'CAS Project Approved',
+      text: `Your CAS project "${project.title}" has been approved.\n\nTeacher Comments: ${teacherComments || 'No comments provided.'}\n\nCongratulations!`
+    };
+    await transporter.sendMail(mailOptions);
+
     res.json({ message: 'Project approved successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Teacher: Deny a project
+app.post('/api/teacher/deny-project/:id', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
+  const { denialComments } = req.body;
+  if (!denialComments) {
+    return res.status(400).json({ message: 'Denial comments are required' });
+  }
+  try {
+    const project = await CASProject.findById(req.params.id).populate('section').populate('student', 'email');
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+    if (project.section.teacher.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Access denied: Project not in your section' });
+    }
+    project.denied = true;
+    project.approved = false;
+    project.denialComments = denialComments;
+    project.teacherComments = '';
+    project.reviewedAt = new Date();
+    await project.save();
+
+    // Send email notification
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: project.student.email,
+      subject: 'CAS Project Denied',
+      text: `Your CAS project "${project.title}" has been denied.\n\nReason: ${denialComments}\n\nPlease edit and resubmit your project.`
+    };
+    await transporter.sendMail(mailOptions);
+
+    res.json({ message: 'Project denied successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
