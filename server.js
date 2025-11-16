@@ -4,12 +4,53 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
-import dotenv from 'dotenv'
+import dotenv from 'dotenv';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config({ path: './.env' })
 
 const app = express();
 const PORT = 5000;
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|mp4|mov|avi/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only images (jpeg, jpg, png, gif) and videos (mp4, mov, avi) are allowed.'));
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+    files: 7 // Max 5 photos + 2 videos = 7 files
+  }
+});
 
 const MONGO_URI = process.env.mongodb;
 const JWT_SECRET = process.env.jwt;
@@ -35,13 +76,76 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   approved: { type: Boolean, default: false },
-  role: { type: String, default: 'user' },
+  role: { type: String, enum: ['admin', 'teacher', 'student'], default: 'student' },
   active: { type: Boolean, default: true },
   otp: { type: String },
   otpExpires: { type: Date }
 });
 
 const User = mongoose.model('User', userSchema);
+
+const sectionSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  students: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
+});
+
+const Section = mongoose.model('Section', sectionSchema);
+
+const casProjectSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  category: [{ type: String, enum: ['Creativity', 'Activity', 'Service'], required: true }],
+  location: { type: String, enum: ['In the school', 'Outside'], required: true },
+  startDate: { type: Date, required: true },
+  endDate: { type: Date, required: true },
+  learningOutcomes: [{ type: String, enum: [
+    'LO1 - Identify own strengths and develop areas for growth',
+    'LO2 - Demonstrate that challenges have been undertaken, developing new skills',
+    'LO3 - Initiate and plan a CAS experience',
+    'LO4 - Show perseverance and commitment in CAS experience',
+    'LO5 - Demonstrate skills and benefits of working collaboratively',
+    'LO6 - Engagement with issues of global significance',
+    'LO7 - Recognise and consider the ethics of choices and actions'
+  ], required: true }],
+  unGoals: [{ type: String, enum: [
+    'No Poverty',
+    'Zero Hunger',
+    'Good Health and Well-being',
+    'Quality Education',
+    'Gender Equality',
+    'Clean Water and Sanitation',
+    'Affordable and Clean Energy',
+    'Decent Work and Economic Growth',
+    'Industry, Innovation and Infrastructure',
+    'Reduced Inequalities',
+    'Sustainable Cities and Communities',
+    'Responsible Consumption and Production',
+    'Climate Action',
+    'Life Below Water',
+    'Life on Land',
+    'Peace and Justice Strong Institutions',
+    'Partnerships for the Goals'
+  ], required: true }],
+  investigation: { type: String, required: true },
+  learnerProfile: { type: String, required: true },
+  supervisorName: { type: String, required: true },
+  status: { type: String, enum: ['For approval', 'In progress'], required: true },
+  evidence: [{
+    filename: { type: String, required: true },
+    originalName: { type: String, required: true },
+    mimetype: { type: String, required: true },
+    size: { type: Number, required: true },
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+  student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  section: { type: mongoose.Schema.Types.ObjectId, ref: 'Section', required: true },
+  approved: { type: Boolean, default: false },
+  teacherComments: { type: String },
+  submittedAt: { type: Date, default: Date.now }
+});
+
+const CASProject = mongoose.model('CASProject', casProjectSchema);
 
 
 const createAdmin = async () => {
@@ -65,6 +169,9 @@ createAdmin();
 app.use(cors());
 app.use(express.json());
 
+// Serve uploaded files statically
+app.use('/uploads', express.static(uploadsDir));
+
 
 const authenticateToken = (req, res, next) => {
   const token = req.header('Authorization')?.split(' ')[1];
@@ -86,7 +193,38 @@ const validatePasswordStrength = (password) => {
   const hasNumbers = /\d/.test(password);
   const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
 
-  return password.length >= minLength && hasUpperCase && hasLowerCase && hasNumbers && hasSpecialChar;
+  const missing = [];
+  if (password.length < minLength) missing.push('at least 8 characters');
+  if (!hasUpperCase) missing.push('1 uppercase letter');
+  if (!hasLowerCase) missing.push('1 lowercase letter');
+  if (!hasNumbers) missing.push('1 number');
+  if (!hasSpecialChar) missing.push('1 special character');
+
+  return missing.length === 0 ? true : `Password must include: ${missing.join(', ')}.`;
+};
+
+// Generate a strong password
+const generateStrongPassword = () => {
+  const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const lower = 'abcdefghijklmnopqrstuvwxyz';
+  const numbers = '0123456789';
+  const special = '!@#$%^&*(),.?":{}|<>';
+
+  let password = '';
+  password += upper[Math.floor(Math.random() * upper.length)];
+  password += lower[Math.floor(Math.random() * lower.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += special[Math.floor(Math.random() * special.length)];
+
+  const allChars = upper + lower + numbers + special;
+  for (let i = 4; i < 12; i++) {
+    password += allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Shuffle the password
+  password = password.split('').sort(() => 0.5 - Math.random()).join('');
+
+  return password;
 };
 
 
@@ -98,8 +236,9 @@ app.post('/api/auth/signup', async (req, res) => {
   if (!email.endsWith('@fountainheadschools.org')) {
     return res.status(400).json({ message: 'Invalid email domain. Must be @fountainheadschools.org' });
   }
-  if (!validatePasswordStrength(password)) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.' });
+  const passwordCheck = validatePasswordStrength(password);
+  if (passwordCheck !== true) {
+    return res.status(400).json({ message: passwordCheck });
   }
   try {
     const existingUser = await User.findOne({ email });
@@ -107,7 +246,7 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ email, password: hashedPassword, approved: false, role: 'user', active: true });
+    const user = new User({ email, password: hashedPassword, approved: false, role: 'student', active: true });
     await user.save();
     res.status(201).json({ message: 'User registered successfully. Awaiting admin approval.' });
   } catch (err) {
@@ -153,12 +292,17 @@ app.get('/api/admin/users', authenticateToken, async (req, res) => {
 
 app.post('/api/admin/approve/:id', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+  const { role } = req.body;
+  if (!role || !['teacher', 'student'].includes(role)) {
+    return res.status(400).json({ message: 'Role must be teacher or student' });
+  }
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.approved = true;
+    user.role = role;
     await user.save();
-    res.json({ message: 'User approved successfully' });
+    res.json({ message: `User approved as ${role} successfully` });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -199,6 +343,81 @@ app.get('/api/admin/all-users', authenticateToken, async (req, res) => {
   }
 });
 
+// Admin: Get all sections
+app.get('/api/admin/sections', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+  try {
+    const sections = await Section.find({}).populate('teacher', 'email').populate('students', 'email');
+    res.json(sections);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin: Create a new section and assign a teacher
+app.post('/api/admin/create-section', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+  const { name, teacherId } = req.body;
+  if (!name || !teacherId) {
+    return res.status(400).json({ message: 'Name and teacherId are required' });
+  }
+  try {
+    const teacher = await User.findById(teacherId);
+    if (!teacher || teacher.role !== 'teacher') {
+      return res.status(400).json({ message: 'Invalid teacher' });
+    }
+    const section = new Section({ name, teacher: teacherId, students: [] });
+    await section.save();
+    res.status(201).json({ message: 'Section created successfully', section });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin: Add a student to a section
+app.post('/api/admin/add-student-to-section', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+  const { sectionId, studentId } = req.body;
+  if (!sectionId || !studentId) {
+    return res.status(400).json({ message: 'SectionId and studentId are required' });
+  }
+  try {
+    const section = await Section.findById(sectionId);
+    const student = await User.findById(studentId);
+    if (!section || !student || student.role !== 'student') {
+      return res.status(400).json({ message: 'Invalid section or student' });
+    }
+    if (!section.students.includes(studentId)) {
+      section.students.push(studentId);
+      await section.save();
+    }
+    res.json({ message: 'Student added to section successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin: Assign or update teacher to a section
+app.post('/api/admin/assign-teacher-to-section', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Access denied' });
+  const { sectionId, teacherId } = req.body;
+  if (!sectionId || !teacherId) {
+    return res.status(400).json({ message: 'SectionId and teacherId are required' });
+  }
+  try {
+    const section = await Section.findById(sectionId);
+    const teacher = await User.findById(teacherId);
+    if (!section || !teacher || teacher.role !== 'teacher') {
+      return res.status(400).json({ message: 'Invalid section or teacher' });
+    }
+    section.teacher = teacherId;
+    await section.save();
+    res.json({ message: 'Teacher assigned to section successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 app.get("/api/user/stats", authenticateToken, (req, res) => {
   
@@ -211,7 +430,7 @@ app.get("/api/user/stats", authenticateToken, (req, res) => {
 
 
 app.get("/api/activities/recent", (req, res) => {
-  
+
   res.json([
     { id: 1, title: "Art Exhibition", category: "creativity", hours: 5, date: "2023-10-01" },
     { id: 2, title: "Football Match", category: "activity", hours: 3, date: "2023-09-28" },
@@ -221,7 +440,141 @@ app.get("/api/activities/recent", (req, res) => {
   ]);
 });
 
-// Forgot Password: Send OTP
+// Student: Submit a CAS project
+app.post('/api/student/submit-project', authenticateToken, upload.array('evidence', 7), async (req, res) => {
+  if (req.user.role !== 'student') return res.status(403).json({ message: 'Access denied' });
+
+  try {
+    const {
+      title,
+      description,
+      category,
+      location,
+      startDate,
+      endDate,
+      learningOutcomes,
+      unGoals,
+      investigation,
+      learnerProfile,
+      supervisorName,
+      status
+    } = req.body;
+
+    // Validation
+    if (!title || !description || !category || !location || !startDate || !endDate ||
+        !learningOutcomes || !unGoals || !investigation || !learnerProfile || !supervisorName || !status) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (new Date(startDate) >= new Date(endDate)) {
+      return res.status(400).json({ message: 'End date must be after start date' });
+    }
+
+    // Validate file uploads
+    const files = req.files || [];
+    const imageCount = files.filter(file => file.mimetype.startsWith('image/')).length;
+    const videoCount = files.filter(file => file.mimetype.startsWith('video/')).length;
+
+    if (imageCount > 5) {
+      return res.status(400).json({ message: 'Maximum 5 photos allowed' });
+    }
+    if (videoCount > 2) {
+      return res.status(400).json({ message: 'Maximum 2 videos allowed' });
+    }
+
+    // Find the section where the student is enrolled
+    const section = await Section.findOne({ students: req.user.id });
+    if (!section) {
+      return res.status(400).json({ message: 'Student not assigned to any section' });
+    }
+
+    // Process evidence files
+    const evidence = files.map(file => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size
+    }));
+
+    const project = new CASProject({
+      title,
+      description,
+      category: Array.isArray(category) ? category : [category],
+      location,
+      startDate,
+      endDate,
+      learningOutcomes: Array.isArray(learningOutcomes) ? learningOutcomes : [learningOutcomes],
+      unGoals: Array.isArray(unGoals) ? unGoals : [unGoals],
+      investigation,
+      learnerProfile,
+      supervisorName,
+      status,
+      evidence,
+      student: req.user.id,
+      section: section._id
+    });
+
+    await project.save();
+    res.status(201).json({ message: 'Project submitted successfully', project });
+  } catch (err) {
+    // Clean up uploaded files if project creation fails
+    if (req.files) {
+      req.files.forEach(file => {
+        fs.unlinkSync(file.path);
+      });
+    }
+    res.status(500).json({ message: err.message || 'Server error' });
+  }
+});
+
+// Student: View their own projects
+app.get('/api/student/projects', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'student') return res.status(403).json({ message: 'Access denied' });
+  try {
+    const projects = await CASProject.find({ student: req.user.id });
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Teacher: View projects in their section
+app.get('/api/teacher/projects', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
+  try {
+    const section = await Section.findOne({ teacher: req.user.id });
+    if (!section) {
+      return res.status(404).json({ message: 'No section assigned to this teacher' });
+    }
+    const projects = await CASProject.find({ section: section._id }).populate('student', 'email');
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Teacher: Approve a project
+app.post('/api/teacher/approve-project/:id', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Access denied' });
+  const { teacherComments } = req.body;
+  try {
+    const project = await CASProject.findById(req.params.id).populate('section');
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+    if (project.section.teacher.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Access denied: Project not in your section' });
+    }
+    project.approved = true;
+    project.teacherComments = teacherComments || '';
+    await project.save();
+    res.json({ message: 'Project approved successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Forgot Password: Send OTP or reset for admin
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -232,20 +585,39 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
-    user.otp = otp;
-    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    await user.save();
+    if (email === 'admin@fountainheadschools.org') {
+      // Generate new strong password for admin
+      const newPassword = generateStrongPassword();
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      user.password = hashedPassword;
+      await user.save();
 
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: 'Password Reset OTP',
-      text: `Your OTP for password reset is: ${otp}. It expires in 10 minutes.`
-    };
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: 's.jaanav.salia2@fountainheadschools.org',
+        subject: 'Admin Password Reset',
+        text: `Your new admin password is: ${newPassword}. Please change it after logging in.`
+      };
 
-    await transporter.sendMail(mailOptions);
-    res.json({ message: 'OTP sent to your email' });
+      await transporter.sendMail(mailOptions);
+      res.json({ message: 'New password sent to admin email' });
+    } else {
+      // Normal user: Send OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+      user.otp = otp;
+      user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      await user.save();
+
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: 'Password Reset OTP',
+        text: `Your OTP for password reset is: ${otp}. It expires in 10 minutes.`
+      };
+
+      await transporter.sendMail(mailOptions);
+      res.json({ message: 'OTP sent to your email' });
+    }
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -274,8 +646,9 @@ app.post('/api/auth/reset-password', async (req, res) => {
   if (!email || !otp || !newPassword) {
     return res.status(400).json({ message: 'Email, OTP, and new password are required' });
   }
-  if (!validatePasswordStrength(newPassword)) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.' });
+  const passwordCheck = validatePasswordStrength(newPassword);
+  if (passwordCheck !== true) {
+    return res.status(400).json({ message: passwordCheck });
   }
   try {
     const user = await User.findOne({ email, otp, otpExpires: { $gt: new Date() } });

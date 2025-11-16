@@ -85,6 +85,8 @@ const HomePage = () => {
             window.location.href = '/login';
           }}>Logout</Link></li>
           {getRole() === 'admin' && <li><Link to="/admin">Admin</Link></li>}
+          {getRole() === 'teacher' && <li><Link to="/teacher">Teacher</Link></li>}
+          {getRole() === 'student' && <li><Link to="/student">Student Portal</Link></li>}
         </ul>
       </nav>
 
@@ -357,11 +359,529 @@ const ForgotPassword = () => {
   );
 };
 
+// Student Component
+const Student = () => {
+  const [projects, setProjects] = useState([]);
+  const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    category: [],
+    location: '',
+    startDate: '',
+    endDate: '',
+    learningOutcomes: [],
+    unGoals: [],
+    investigation: '',
+    learnerProfile: '',
+    supervisorName: '',
+    status: ''
+  });
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const token = getToken();
+
+  const categories = ['Creativity', 'Activity', 'Service'];
+  const locations = ['In the school', 'Outside'];
+  const learningOutcomesList = [
+    'LO1 - Identify own strengths and develop areas for growth',
+    'LO2 - Demonstrate that challenges have been undertaken, developing new skills',
+    'LO3 - Initiate and plan a CAS experience',
+    'LO4 - Show perseverance and commitment in CAS experience',
+    'LO5 - Demonstrate skills and benefits of working collaboratively',
+    'LO6 - Engagement with issues of global significance',
+    'LO7 - Recognise and consider the ethics of choices and actions'
+  ];
+  const unGoalsList = [
+    'No Poverty',
+    'Zero Hunger',
+    'Good Health and Well-being',
+    'Quality Education',
+    'Gender Equality',
+    'Clean Water and Sanitation',
+    'Affordable and Clean Energy',
+    'Decent Work and Economic Growth',
+    'Industry, Innovation and Infrastructure',
+    'Reduced Inequalities',
+    'Sustainable Cities and Communities',
+    'Responsible Consumption and Production',
+    'Climate Action',
+    'Life Below Water',
+    'Life on Land',
+    'Peace and Justice Strong Institutions',
+    'Partnerships for the Goals'
+  ];
+  const statuses = ['For approval', 'In progress'];
+
+  const fetchProjects = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/student/projects', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setProjects(response.data);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to load projects');
+    }
+  };
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+  };
+
+  const handleCheckboxChange = (field, value) => {
+    const currentValues = formData[field];
+    if (currentValues.includes(value)) {
+      setFormData({ ...formData, [field]: currentValues.filter(item => item !== value) });
+    } else {
+      setFormData({ ...formData, [field]: [...currentValues, value] });
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    const imageFiles = files.filter(file => file.type.startsWith('image/'));
+    const videoFiles = files.filter(file => file.type.startsWith('video/'));
+
+    if (imageFiles.length > 5) {
+      setError('Maximum 5 photos allowed');
+      return;
+    }
+    if (videoFiles.length > 2) {
+      setError('Maximum 2 videos allowed');
+      return;
+    }
+    if (files.length > 7) {
+      setError('Maximum 7 files total (5 photos + 2 videos)');
+      return;
+    }
+
+    setSelectedFiles(files);
+    setError('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    // Validation
+    if (!formData.title || !formData.description || formData.category.length === 0 ||
+        !formData.location || !formData.startDate || !formData.endDate ||
+        formData.learningOutcomes.length === 0 || formData.unGoals.length === 0 ||
+        !formData.investigation || !formData.learnerProfile || !formData.supervisorName || !formData.status) {
+      setError('Please fill in all required fields');
+      return;
+    }
+
+    if (new Date(formData.startDate) >= new Date(formData.endDate)) {
+      setError('End date must be after start date');
+      return;
+    }
+
+    try {
+      const formDataToSend = new FormData();
+
+      // Add form data
+      Object.keys(formData).forEach(key => {
+        if (Array.isArray(formData[key])) {
+          formData[key].forEach(value => formDataToSend.append(key, value));
+        } else {
+          formDataToSend.append(key, formData[key]);
+        }
+      });
+
+      // Add files
+      selectedFiles.forEach(file => {
+        formDataToSend.append('evidence', file);
+      });
+
+      await axios.post('http://localhost:5000/api/student/submit-project', formDataToSend, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      setSuccess('Project submitted successfully!');
+      setFormData({
+        title: '',
+        description: '',
+        category: [],
+        location: '',
+        startDate: '',
+        endDate: '',
+        learningOutcomes: [],
+        unGoals: [],
+        investigation: '',
+        learnerProfile: '',
+        supervisorName: '',
+        status: ''
+      });
+      setSelectedFiles([]);
+      setShowSubmitForm(false);
+      fetchProjects();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to submit project');
+    }
+  };
+
+  if (error && !showSubmitForm) return <div className="error">{error}</div>;
+
+  return (
+    <div className="student-container">
+      <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
+      <h2>Student CAS Portal</h2>
+
+      <div className="student-actions">
+        <button className="submit-project-btn" onClick={() => setShowSubmitForm(!showSubmitForm)}>
+          {showSubmitForm ? 'Cancel' : 'Submit New CAS Project'}
+        </button>
+      </div>
+
+      {showSubmitForm && (
+        <div className="cas-form-container">
+          <h3>Submit CAS Project</h3>
+          {error && <div className="error">{error}</div>}
+          {success && <div className="success">{success}</div>}
+          <form onSubmit={handleSubmit} className="cas-form">
+            <div className="form-group">
+              <label>Title for CAS:</label>
+              <input
+                type="text"
+                name="title"
+                value={formData.title}
+                onChange={handleInputChange}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Describe the experience:</label>
+              <textarea
+                name="description"
+                value={formData.description}
+                onChange={handleInputChange}
+                rows="4"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Category (select all that apply):</label>
+              <div className="checkbox-group">
+                {categories.map(cat => (
+                  <label key={cat} className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.category.includes(cat)}
+                      onChange={() => handleCheckboxChange('category', cat)}
+                    />
+                    {cat}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Location:</label>
+              <select name="location" value={formData.location} onChange={handleInputChange} required>
+                <option value="">Select location</option>
+                {locations.map(loc => (
+                  <option key={loc} value={loc}>{loc}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Date (from which date to what date):</label>
+              <div className="date-group">
+                <input
+                  type="date"
+                  name="startDate"
+                  value={formData.startDate}
+                  onChange={handleInputChange}
+                  required
+                />
+                <span>to</span>
+                <input
+                  type="date"
+                  name="endDate"
+                  value={formData.endDate}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Learning Outcomes (select all that apply):</label>
+              <div className="checkbox-group">
+                {learningOutcomesList.map(lo => (
+                  <label key={lo} className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.learningOutcomes.includes(lo)}
+                      onChange={() => handleCheckboxChange('learningOutcomes', lo)}
+                    />
+                    {lo}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Goals aligned with UN SDGs (select all that apply):</label>
+              <div className="checkbox-group">
+                {unGoalsList.map(goal => (
+                  <label key={goal} className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.unGoals.includes(goal)}
+                      onChange={() => handleCheckboxChange('unGoals', goal)}
+                    />
+                    {goal}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Investigation:</label>
+              <textarea
+                name="investigation"
+                value={formData.investigation}
+                onChange={handleInputChange}
+                rows="3"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Learner Profile:</label>
+              <textarea
+                name="learnerProfile"
+                value={formData.learnerProfile}
+                onChange={handleInputChange}
+                rows="3"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Name of the supervisor:</label>
+              <input
+                type="text"
+                name="supervisorName"
+                value={formData.supervisorName}
+                onChange={handleInputChange}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Status of CAS:</label>
+              <select name="status" value={formData.status} onChange={handleInputChange} required>
+                <option value="">Select status</option>
+                {statuses.map(status => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Evidence (Upload up to 5 photos and 2 videos):</label>
+              <input
+                type="file"
+                multiple
+                accept="image/*,video/*"
+                onChange={handleFileChange}
+                className="file-input"
+              />
+              {selectedFiles.length > 0 && (
+                <div className="file-preview">
+                  <p>Selected files ({selectedFiles.length}):</p>
+                  <ul>
+                    {selectedFiles.map((file, index) => (
+                      <li key={index}>
+                        {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <button type="submit" className="submit-btn">Submit Project</button>
+          </form>
+        </div>
+      )}
+
+      <section>
+        <h3>My CAS Projects</h3>
+        {projects.length === 0 ? (
+          <div className="no-projects">
+            <p>No projects submitted yet.</p>
+          </div>
+        ) : (
+          projects.map(project => (
+            <div key={project._id} className={`project-card ${project.approved ? 'approved' : ''}`}>
+              <h4>{project.title}</h4>
+              <p><strong>Description:</strong> {project.description}</p>
+              <p><strong>Category:</strong> {project.category.join(', ')}</p>
+              <p><strong>Location:</strong> {project.location}</p>
+              <p><strong>Duration:</strong> {new Date(project.startDate).toLocaleDateString()} - {new Date(project.endDate).toLocaleDateString()}</p>
+              <p><strong>Status:</strong> {project.status}</p>
+              <p><strong>Approved:</strong> <span className={`status ${project.approved ? 'approved' : 'pending'}`}>{project.approved ? 'Yes' : 'No'}</span></p>
+              {project.evidence && project.evidence.length > 0 && (
+                <div className="evidence-section">
+                  <p><strong>Evidence ({project.evidence.length} files):</strong></p>
+                  <div className="evidence-files">
+                    {project.evidence.map((file, index) => (
+                      <div key={index} className="evidence-file">
+                        {file.mimetype.startsWith('image/') ? (
+                          <img
+                            src={`http://localhost:5000/uploads/${file.filename}`}
+                            alt={file.originalName}
+                            className="evidence-thumbnail"
+                          />
+                        ) : (
+                          <video
+                            src={`http://localhost:5000/uploads/${file.filename}`}
+                            controls
+                            className="evidence-video"
+                          />
+                        )}
+                        <p className="file-name">{file.originalName}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {project.approved && project.teacherComments && (
+                <p><strong>Teacher Comments:</strong> {project.teacherComments}</p>
+              )}
+            </div>
+          ))
+        )}
+      </section>
+    </div>
+  );
+};
+
+// Teacher Component
+const Teacher = () => {
+  const [projects, setProjects] = useState([]);
+  const [error, setError] = useState('');
+  const [comments, setComments] = useState({});
+  const token = getToken();
+
+  const fetchProjects = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/teacher/projects', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setProjects(response.data);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to load projects');
+    }
+  };
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const approveProject = async (id) => {
+    const projectComments = comments[id] || '';
+    try {
+      await axios.post(`http://localhost:5000/api/teacher/approve-project/${id}`, { teacherComments: projectComments }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchProjects();
+      setComments({ ...comments, [id]: '' });
+    } catch (err) {
+      setError('Failed to approve project');
+    }
+  };
+
+  const handleCommentChange = (id, value) => {
+    setComments({ ...comments, [id]: value });
+  };
+
+  if (error) return <div className="error">{error}</div>;
+
+  return (
+    <div className="teacher-container">
+      <button className="back-btn" onClick={() => window.location.href = '/'}>Back to Dashboard</button>
+      <h2>Teacher Dashboard</h2>
+
+      <section>
+        <h3>CAS Projects in Your Section</h3>
+        {projects.length === 0 ? (
+          <div className="no-projects">
+            <p>No projects submitted yet.</p>
+          </div>
+        ) : (
+          projects.map(project => (
+            <div key={project._id} className={`project-card ${project.approved ? 'approved' : ''}`}>
+              <h4>{project.title}</h4>
+              <p>{project.description}</p>
+              <p className="student-info">Student: {project.student.email}</p>
+              <p className="submitted-date">Submitted: {new Date(project.submittedAt).toLocaleDateString()}</p>
+              <p><strong>Category:</strong> {project.category.join(', ')}</p>
+              <p><strong>Location:</strong> {project.location}</p>
+              <p><strong>Duration:</strong> {new Date(project.startDate).toLocaleDateString()} - {new Date(project.endDate).toLocaleDateString()}</p>
+              <p><strong>Status:</strong> {project.status}</p>
+              <p><strong>Learning Outcomes:</strong> {project.learningOutcomes.join(', ')}</p>
+              <p><strong>UN Goals:</strong> {project.unGoals.join(', ')}</p>
+              <p><strong>Supervisor:</strong> {project.supervisorName}</p>
+              {project.approved && project.teacherComments && (
+                <p><strong>Comments:</strong> {project.teacherComments}</p>
+              )}
+              {!project.approved && (
+                <div className="project-actions">
+                  <textarea
+                    className="teacher-comments"
+                    placeholder="Add comments (optional)"
+                    value={comments[project._id] || ''}
+                    onChange={(e) => handleCommentChange(project._id, e.target.value)}
+                  />
+                  <button className="approve-project-btn" onClick={() => approveProject(project._id)}>Approve Project</button>
+                </div>
+              )}
+              {project.approved && (
+                <div className="project-status">
+                  <span className="status approved">Approved</span>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </section>
+    </div>
+  );
+};
+
 // Admin Component
 const Admin = () => {
   const [allUsers, setAllUsers] = useState([]);
   const [unapprovedUsers, setUnapprovedUsers] = useState([]);
+  const [sections, setSections] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [students, setStudents] = useState([]);
   const [error, setError] = useState('');
+  const [selectedRole, setSelectedRole] = useState('student');
+  const [newSectionName, setNewSectionName] = useState('');
+  const [selectedTeacherForSection, setSelectedTeacherForSection] = useState('');
+  const [selectedSectionForStudent, setSelectedSectionForStudent] = useState('');
+  const [selectedStudentForSection, setSelectedStudentForSection] = useState('');
+  const [selectedSectionForTeacher, setSelectedSectionForTeacher] = useState('');
+  const [selectedTeacherForAssignment, setSelectedTeacherForAssignment] = useState('');
   const token = getToken();
 
   const fetchAllUsers = async () => {
@@ -386,14 +906,40 @@ const Admin = () => {
     }
   };
 
+  const fetchSections = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/admin/sections', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSections(response.data);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to load sections');
+    }
+  };
+
+  const fetchTeachersAndStudents = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/admin/all-users', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const users = response.data;
+      setTeachers(users.filter(user => user.role === 'teacher'));
+      setStudents(users.filter(user => user.role === 'student'));
+    } catch (err) {
+      setError('Failed to load users');
+    }
+  };
+
   useEffect(() => {
     fetchAllUsers();
     fetchUnapprovedUsers();
+    fetchTeachersAndStudents();
+    fetchSections();
   }, []);
 
-  const approveUser = async (id) => {
+  const approveUser = async (id, role) => {
     try {
-      await axios.post(`http://localhost:5000/api/admin/approve/${id}`, {}, {
+      await axios.post(`http://localhost:5000/api/admin/approve/${id}`, { role }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchAllUsers();
@@ -425,6 +971,69 @@ const Admin = () => {
     }
   };
 
+  const createSection = async () => {
+    if (!newSectionName || !selectedTeacherForSection) {
+      setError('Section name and teacher are required');
+      return;
+    }
+    try {
+      await axios.post('http://localhost:5000/api/admin/create-section', {
+        name: newSectionName,
+        teacherId: selectedTeacherForSection
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setNewSectionName('');
+      setSelectedTeacherForSection('');
+      fetchTeachersAndStudents();
+      fetchSections();
+    } catch (err) {
+      setError('Failed to create section');
+    }
+  };
+
+  const addStudentToSection = async () => {
+    if (!selectedSectionForStudent || !selectedStudentForSection) {
+      setError('Section and student are required');
+      return;
+    }
+    try {
+      await axios.post('http://localhost:5000/api/admin/add-student-to-section', {
+        sectionId: selectedSectionForStudent,
+        studentId: selectedStudentForSection
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSelectedSectionForStudent('');
+      setSelectedStudentForSection('');
+      fetchTeachersAndStudents();
+      fetchSections();
+    } catch (err) {
+      setError('Failed to add student to section');
+    }
+  };
+
+  const assignTeacherToSection = async () => {
+    if (!selectedSectionForTeacher || !selectedTeacherForAssignment) {
+      setError('Section and teacher are required');
+      return;
+    }
+    try {
+      await axios.post('http://localhost:5000/api/admin/assign-teacher-to-section', {
+        sectionId: selectedSectionForTeacher,
+        teacherId: selectedTeacherForAssignment
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSelectedSectionForTeacher('');
+      setSelectedTeacherForAssignment('');
+      fetchTeachersAndStudents();
+      fetchSections();
+    } catch (err) {
+      setError('Failed to assign teacher to section');
+    }
+  };
+
   if (error) return <div className="error">{error}</div>;
 
   return (
@@ -434,6 +1043,13 @@ const Admin = () => {
 
       <section>
         <h3>Users Awaiting Approval</h3>
+        <div className="role-selector">
+          <label>Assign Role: </label>
+          <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)}>
+            <option value="student">Student</option>
+            <option value="teacher">Teacher</option>
+          </select>
+        </div>
         {unapprovedUsers.length === 0 ? (
           <p>No users awaiting approval.</p>
         ) : (
@@ -451,7 +1067,7 @@ const Admin = () => {
                   <td>{user.email}</td>
                   <td><span className="status pending">Pending</span></td>
                   <td>
-                    <button className="approve-btn" onClick={() => approveUser(user._id)}>Approve</button>
+                    <button className="approve-btn" onClick={() => approveUser(user._id, selectedRole)}>Approve as {selectedRole}</button>
                   </td>
                 </tr>
               ))}
@@ -493,6 +1109,61 @@ const Admin = () => {
           </table>
         )}
       </section>
+
+      <section className="section-management">
+        <h3>Section Management</h3>
+
+        <div className="section-form">
+          <h4>Create New Section</h4>
+          <input
+            type="text"
+            placeholder="Section Name"
+            value={newSectionName}
+            onChange={e => setNewSectionName(e.target.value)}
+          />
+          <select value={selectedTeacherForSection} onChange={e => setSelectedTeacherForSection(e.target.value)}>
+            <option value="">Select Teacher</option>
+            {teachers.map(teacher => (
+              <option key={teacher._id} value={teacher._id}>{teacher.email}</option>
+            ))}
+          </select>
+          <button onClick={createSection}>Create Section</button>
+        </div>
+
+        <div className="section-form">
+          <h4>Add Student to Section</h4>
+          <select value={selectedSectionForStudent} onChange={e => setSelectedSectionForStudent(e.target.value)}>
+            <option value="">Select Section</option>
+            {sections.map(section => (
+              <option key={section._id} value={section._id}>{section.name}</option>
+            ))}
+          </select>
+          <select value={selectedStudentForSection} onChange={e => setSelectedStudentForSection(e.target.value)}>
+            <option value="">Select Student</option>
+            {students.map(student => (
+              <option key={student._id} value={student._id}>{student.email}</option>
+            ))}
+          </select>
+          <button onClick={addStudentToSection}>Add Student</button>
+        </div>
+
+        <div className="section-form">
+          <h4>Assign Teacher to Section</h4>
+          <select value={selectedSectionForTeacher} onChange={e => setSelectedSectionForTeacher(e.target.value)}>
+            <option value="">Select Section</option>
+            {sections.map(section => (
+              <option key={section._id} value={section._id}>{section.name}</option>
+            ))}
+          </select>
+          <select value={selectedTeacherForAssignment} onChange={e => setSelectedTeacherForAssignment(e.target.value)}>
+            <option value="">Select Teacher</option>
+            {teachers.map(teacher => (
+              <option key={teacher._id} value={teacher._id}>{teacher.email}</option>
+            ))}
+          </select>
+          <button onClick={assignTeacherToSection}>Assign Teacher</button>
+        </div>
+      </section>
     </div>
   );
 };
@@ -524,6 +1195,16 @@ const App = () => {
         <Route path="/admin" element={
           <ProtectedRoute adminOnly={true}>
             <Admin />
+          </ProtectedRoute>
+        } />
+        <Route path="/teacher" element={
+          <ProtectedRoute>
+            <Teacher />
+          </ProtectedRoute>
+        } />
+        <Route path="/student" element={
+          <ProtectedRoute>
+            <Student />
           </ProtectedRoute>
         } />
         {/* Add other routes like /add-activity, /profile, etc. */}
